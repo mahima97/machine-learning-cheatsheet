@@ -43,11 +43,14 @@ class SelfAttention(torch.nn.Module):
 		self.key = torch.nn.Linear(self.embedding_dim, self.attention_dim)
 		self.value = torch.nn.Linear(self.embedding_dim, self.attention_dim)
 
-	def forward(self, embeddings):
+	def forward(self, embeddings, context=None):
+
+		if context is None:
+			context = embeddings
 
 		q = self.query(embeddings)
-		k = self.key(embeddings)
-		v = self.value(embeddings)
+		k = self.key(context)
+		v = self.value(context)
 
 		dk = v.shape[2]
 		context_len = v.shape[1]
@@ -95,10 +98,10 @@ class MultiHeadAttention(torch.nn.Module):
 
 		self.output_projection = torch.nn.Linear(attention_dim, embedding_dim)
 
-	def forward(self, embeddings):
+	def forward(self, embeddings, context=None):
 		head_output = []
 		for head in self.att_heads:
-			head_output.append(head(embeddings))
+			head_output.append(head(embeddings, context))
 
 		# print(head_output)
 
@@ -119,7 +122,7 @@ class FeedForward(nn.Module):
     def forward(self, x):
         return self.net(x)
 
-class TransformerBlock(nn.Module):
+class EcoderBlock(nn.Module):
     def __init__(self, embedding_dim, attention_dim, num_heads, ff_dim, use_mask=False):
         super().__init__()
         self.attention = MultiHeadAttention(embedding_dim, attention_dim, num_heads, use_mask)
@@ -137,38 +140,81 @@ class TransformerBlock(nn.Module):
         x = self.norm2(x + ff_out)
         return x
 
-class TransformerEncoder(nn.Module):
-    def __init__(self, embedding_dim, attention_dim, num_heads, ff_dim, num_layers, max_seq_length):
+class DecoderBlock(nn.Module):
+	"""docstring for DecoderBlock"""
+	def __init__(self, embedding_dim, attention_dim, num_heads, ff_dim, use_mask=True):
+		super().__init__()
+		self.attention = MultiHeadAttention(embedding_dim, attention_dim, num_heads, use_mask=True)
+		self.norm1 = nn.LayerNorm(embedding_dim)
+		self.cross_attention = MultiHeadAttention(embedding_dim, attention_dim, num_heads, use_mask=False)
+		self.norm2 = nn.LayerNorm(embedding_dim)
+		self.ff = FeedForward(embedding_dim, ff_dim)
+		self.norm3 = nn.LayerNorm(embedding_dim)
+
+	def forward(self, embedding, context):
+		att = self.attention(embedding)
+		x = self.norm1(embedding + att)
+		cross_att = self.cross_attention(x, context)
+		x = self.norm2(x + cross_att)
+		x2 = self.ff(x)
+
+		return self.norm3(x + x2)
+
+
+		
+
+class Transformer(nn.Module):
+    def __init__(self, vocab_size, embedding_dim, attention_dim, num_heads, ff_dim, num_encoder_layers, num_decoder_layers, max_seq_length):
         super().__init__()
+        self.Embeddings = nn.Embedding(vocab_size, embedding_dim)
         self.pos_encoding = PositionalEncoding(embedding_dim, max_seq_length)
-        self.layers = nn.ModuleList([
-            TransformerBlock(embedding_dim, attention_dim, num_heads, ff_dim) for _ in range(num_layers)
+        self.Encoderlayers = nn.ModuleList([
+            EcoderBlock(embedding_dim, attention_dim, num_heads, ff_dim) for _ in range(num_encoder_layers)
         ])
+        self.DecoderLayers = nn.ModuleList([
+        	DecoderBlock(embedding_dim, attention_dim, num_heads, ff_dim) for _ in range(num_decoder_layers)
 
-    def forward(self, x):
-        x = self.pos_encoding(x)
-        for layer in self.layers:
-            x = layer(x)
-        return x
+        ])
+        self.projection_output = nn.Linear(embedding_dim, vocab_size)
 
-# Example usage
-batch_size = 2
-seq_len = 20
-embedding_dim = 64
-attention_dim = 128
+    def forward(self, src, trg):
+        src = self.pos_encoding(self.Embeddings(src))
+        trg = self.pos_encoding(self.Embeddings(trg))
+
+        for layer in self.Encoderlayers:
+        	src = layer(src)
+
+        for layer in self.DecoderLayers:
+        	trg = layer(trg, src)
+
+        out = self.projection_output(trg)
+        return out
+
+
+
+vocab_size = 1000
+embed_dim = 64
+attn_dim = 128
 num_heads = 4
 ff_dim = 256
-num_layers = 2
+max_seq_len = 50
+num_encoder_layers = 2
+num_decoder_layers = 2
 
-model = TransformerEncoder(
-    embedding_dim=embedding_dim,
-    attention_dim=attention_dim,
+model = Transformer(
+    vocab_size=vocab_size,
+    embedding_dim=embed_dim,
+    attention_dim=attn_dim,
     num_heads=num_heads,
     ff_dim=ff_dim,
-    num_layers=num_layers,
-    max_seq_length=seq_len
+    num_encoder_layers=num_encoder_layers,
+    num_decoder_layers=num_decoder_layers,
+    max_seq_length=max_seq_len
 )
 
-dummy_input = torch.rand(batch_size, seq_len, embedding_dim)
-output = model(dummy_input)
-print("Transformer output shape:", output.shape)  # Expected: (2, 20, 64)
+# Dummy input (batch_size=2, seq_len=10)
+src = torch.randint(0, vocab_size, (2, 10))
+tgt = torch.randint(0, vocab_size, (2, 10))
+output = model.forward(src, tgt)  # shape: (2, 10, vocab_size)
+
+print("Transformer output shape:", output.shape)
