@@ -13,6 +13,7 @@ The transformer includes following modules:
 
 ## MixtureOfExperts
 
+![MoE](https://github.com/user-attachments/assets/58183369-ce85-4d95-9ccf-0f22fd9da13d)
 
 References and additional links:
 Sparse Mixture of Experts paper: https://arxiv.org/abs/1701.06538
